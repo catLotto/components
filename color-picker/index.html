@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<title>Color Picker</title>
+	<script type='text/javascript'>
+		// 코드 개선, 모두 옵져버 형태로.
+		class Observable {
+			constructor() {
+				this.observers = [];
+			}
+			subscribe(f) {
+				this.observers.push(f);
+			}
+			unsubscribe(f) {
+				this.observers = this.observers.filter(item => item !== f);
+			}
+			notify(data) {
+				for (const observer of this.observers) {
+					if (typeof observer === 'function') observer(data);
+				}
+			}
+		}
+		
+		class DragDoc {
+			constructor() {
+				this._pressedElement = null;
+				this.draggableElements = [];
+				
+				document.addEventListener('mousemove', e => {
+					if (this._pressedElement) {
+						this._pressedElement.run(e);
+						e.preventDefault();
+					}
+				});
+				document.addEventListener('mouseup', e => {
+					this._pressedElement = null;
+				});
+			}
+			add(el) {	
+				this.draggableElements.push(el);
+			}
+		}
+		const dragDoc = new DragDoc();
+		
+		class DragElement {
+			constructor(el) {
+				this.el = el;
+				this.methods = {};
+
+				dragDoc.add(this);
+				this.el.addEventListener('mousedown', e => {
+					this.run(e);
+					dragDoc._pressedElement = this;
+				});
+			}
+
+			run(e) {
+				for (const key in this.methods) {
+					this.methods[key](e, this);
+				}
+			}
+		}
+		
+		class CustomColorPicker {
+			constructor() {
+				this.palette = new DragElement(document.getElementsByClassName('palette')[0]);
+				this.palettePicker = document.getElementsByClassName('palette-picker')[0];
+				this.spectrum = new DragElement(document.getElementsByClassName('hsv-spectrum')[0]);
+				this.spectrumPicker = document.getElementsByClassName('hsv-spectrum-picker')[0];
+				this.currentColor = document.getElementsByClassName('currentColor')[0];
+				this.inputs = document.querySelectorAll('.value-controller input');
+				this._setInputs();
+				
+				const SELF = this;
+				const pickColor = {
+					getPosition(e, target) {
+						const { left, top, width, height } = target.el.getBoundingClientRect();
+						const result = { 
+							x: e.pageX - left,
+							y: e.pageY - top,
+							percentX: Math.max(0, Math.min(100, (e.pageX - left) / width * 100)),
+							percentY: Math.max(0, Math.min(100, (e.pageY - top) / height * 100)),
+							left,
+							top,
+							width,
+							height
+						};
+						
+						switch (target.el.className) {
+							case 'palette':
+								SELF.paletteTouch(result);
+								break;
+							case 'hsv-spectrum':
+								SELF.spectrumTouch(result);
+								break;
+								
+						}
+					}
+				}
+				
+				this._bind(this.palette, pickColor);
+				this._bind(this.spectrum, pickColor);
+			}
+			
+			_bind(target, methods) {
+				for (const key in methods) {
+					target.methods[key] = methods[key];
+				}
+			}
+			
+			paletteTouch({ x, y, percentX, percentY, width, height } = {}) {
+				this.palettePicker.style['transform'] =
+					`translate(
+							${ Math.max(0, Math.min(width, x)) - 5 }px,
+							${ Math.max(0, Math.min(height, y)) - 5 }px	
+						)`;
+
+				this.inputs[1].value = Math.round(percentX),
+				this.inputs[2].value = Math.round(100 - percentY);
+
+				const h = Number(this.inputs[0].value),
+							s = Number(this.inputs[1].value),
+							v = Number(this.inputs[2].value);
+
+				const { r, g, b } = this.HSVtoRGB(h / 360, s / 100, v / 100);
+
+				this._setInputRGB(r, g, b);
+				this.changeHEX({ r, g, b });
+			}
+			
+			spectrumTouch({ x, y, percentX, percentY, width, height } = {}) {
+				let deg = (360 * (1 - percentY * 0.01));
+				deg = deg === 360 ? 0 : deg;
+				
+				this.inputs[0].value = Math.round(deg);
+
+				const s = Number(this.inputs[1].value),
+							v = Number(this.inputs[2].value);
+				let { r, g, b } = this.HSVtoRGB(deg / 360, s / 100, v / 100);
+				
+				this.changePallete(this.HSVtoRGB(deg / 360));
+				
+				this._setInputRGB(r, g, b);
+				
+				({ r, g, b } = this.HSVtoRGB(deg / 360));
+				this.spectrumPicker.style['border'] = `1px solid rgb(${ 255 - r }, ${ 255 - g }, ${ 255 - b })`;
+				this.spectrumPicker.style['transform'] = `translateY(${ Math.max(2, Math.min(height, y)) - 2 }px)`;
+				this.changeHEX({ r, g, b });
+			}
+
+			HSVtoRGB(h, s = 1, v = 1) {
+				h = Number(h),
+				s = Number(s),
+				v = Number(v);
+				let i, f, p, q, t,
+						r, g, b;
+				
+				i = Math.floor(h * 6);
+				f = h * 6 - i;
+				p = v * (1 - s);
+				q = v * (1 - f * s);
+				t = v * (1 - (1 - f) * s);
+				switch (i % 6) {
+					case 0: r = v, g = t, b = p; break;
+					case 1: r = q, g = v, b = p; break;
+					case 2: r = p, g = v, b = t; break;
+					case 3: r = p, g = q, b = v; break;
+					case 4: r = t, g = p, b = v; break;
+					case 5: r = v, g = p, b = q; break;
+				}
+
+				return {
+					r: Math.round(r * 255),
+					g: Math.round(g * 255),
+					b: Math.round(b * 255)
+				};
+			}
+		
+			RGBtoHSV(r, g, b) {
+				let max = Math.max(r, g, b), min = Math.min(r, g, b),
+						d = max - min,
+						h,
+						s = (max === 0 ? 0 : d / max),
+						v = max / 255;
+				
+				switch (max) {
+					case min: 
+						h = 0; 
+						break;
+					case r: 
+						h = (g - b) + d * (g < b ? 6: 0); h /= 6 * d; 
+						break;
+					case g: 
+						h = (b - r) + d * 2; h /= 6 * d; 
+						break;
+					case b: 
+						h = (r - g) + d * 4; h /= 6 * d; 
+						break;
+				}
+				return {
+					h: h,
+					s: s,
+					v: v
+				};
+			}
+			
+			_autoPick(h, s, v) {
+				const { palette, spectrum } = this;
+				{
+					const { width, height } = palette.el.getBoundingClientRect();
+					this.palettePicker.style['transform'] =
+						`translate(
+							${ width * s * 0.01 - 5 }px,
+							${ height * (100 - v) * 0.01 - 5 }px
+						)`;
+				}
+				{
+					const { height } = spectrum.el.getBoundingClientRect();
+					const { r, g, b } = this.HSVtoRGB(h / 360);
+					this.spectrumPicker.style['border'] = `1px solid rgb(${ 255 - r }, ${ 255 - g }, ${ 255 - b })`;
+					this.spectrumPicker.style['transform'] = `translateY(${ (1 - h / 360) * height - 2 }px)`;
+				}
+			}
+			_setInputHSV(h, s, v) {
+				this.inputs[0].value = h;
+				this.inputs[1].value = s;
+				this.inputs[2].value = v;
+			}
+			_setInputRGB(r, g, b) {
+				this.inputs[3].value = r;
+				this.inputs[4].value = g;
+				this.inputs[5].value = b;
+			}
+			_setInputs() {
+				const HSV_OBSERVER = new Observable();
+				const RGB_OBSERVER = new Observable();
+				const HEX_OBSERVER = new Observable();
+				
+				const inputEvent = (e, type, observer) => {
+					const { target } = e;
+					let v;
+					switch (type) {
+						case 'HSV':
+							v = Number(target.value.replace(/[^0-9]/g, ''));
+							if (target.id.substr(-1) === 'H') { v = Math.max(0, Math.min(360, v)); target.value = v === 360 ? 0 : v; }
+							else { target.value = Math.max(0, Math.min(100, v)); }
+							break;
+						case 'RGB':
+							v = Number(target.value.replace(/[^0-9]/g, ''));
+							target.value = Math.max(0, Math.min(255, v));
+							break;
+						case 'HEX':
+							target.value = (target.value.replace(/[^0-9a-zA-Z]/g, '')).toUpperCase();;
+							break;
+					}
+					if (observer instanceof Observable)	observer.notify(target.value);
+				};
+				
+				HSV_OBSERVER.subscribe(data => {
+					const h = Number(this.inputs[0].value),
+								s = Number(this.inputs[1].value),
+								v = Number(this.inputs[2].value);
+					const { r, g, b } = this.HSVtoRGB(h / 360, s / 100, v / 100);
+					
+					this._setInputRGB(Math.floor(r), Math.floor(g), Math.floor(b));
+					this._autoPick(h, s, v);
+					this.changePallete(this.HSVtoRGB(h / 360));
+					this.changeHEX({ r, g, b });
+				});
+				
+				RGB_OBSERVER.subscribe(data => {
+					const r = Number(this.inputs[3].value),
+								g = Number(this.inputs[4].value),
+								b = Number(this.inputs[5].value);
+					let { h, s, v } = this.RGBtoHSV(r, g, b);
+					h *= 360, s *= 100, v *= 100;
+					
+					this._setInputHSV(Math.floor(h), Math.floor(s), Math.floor(v));
+					this._autoPick(h, s, v);
+					this.changePallete(this.HSVtoRGB(h / 360));
+					this.changeHEX({ r, g, b });
+				});
+				
+				HEX_OBSERVER.subscribe(data => {
+					const { value } = this.inputs[6];
+					let r = value.substr(0, 2),
+							g = value.substr(2, 2),
+							b = value.substr(4, 2);
+					
+					r = Number('0x' + r),
+					g = Number('0x' + g),
+					b = Number('0x' + b);
+					let { h, s, v } = this.RGBtoHSV(r, g, b);
+					
+					h *= 360, s *= 100, v *= 100;
+					this._setInputRGB(r, g, b);
+					this._setInputHSV(Math.floor(h), Math.floor(s), Math.floor(v));
+					this._autoPick(h, s, v);
+					this.changePallete(this.HSVtoRGB(h / 360));
+				});
+				
+				for (let i = 0, input; input = this.inputs[i], i < 3; i++) {
+					input.addEventListener('input', e => inputEvent(e, 'HSV', HSV_OBSERVER));
+				}
+				for (let i = 3, input; input = this.inputs[i], i < 6; i++) {
+					input.addEventListener('input', e => inputEvent(e, 'RGB', RGB_OBSERVER));
+				}
+				this.inputs[6].addEventListener('input', e => inputEvent(e, 'HEX', HEX_OBSERVER));
+				
+				//INIT
+				inputEvent({ target: { value: '' } }, 'HEX', HEX_OBSERVER);
+				this.currentColor.style['background'] = '#' + this.inputs[6].value;
+			}
+			
+			changePallete({ r, g, b }) {
+				this.palette.el.style['background'] = `rgb(${ r }, ${ g }, ${ b })`;
+			}
+			
+			changeHEX({ r, g, b }) {
+				r = (r).toString(16), r.length === 1 ? r = '0' + r : 0;
+				g = (g).toString(16), g.length === 1 ? g = '0' + g : 0;
+				b = (b).toString(16), b.length === 1 ? b = '0' + b : 0;
+				this.inputs[6].value = (r + g + b).toUpperCase();
+				this.currentColor.style['background'] = '#' + this.inputs[6].value;
+			}
+			invertRGB({ r, g, b }) {
+				return {
+					r: 255 - r,
+					g: 255 - g,
+					b: 255 - b
+				};
+			}
+		}
+		onload = _=> {
+			const customColorPicker = new CustomColorPicker();
+		}
+	</script>
+	<style type='text/css'>
+		* {
+			margin: 0;
+			padding: 0;
+		}
+		.custom-color-picker {
+			display: inline-block;
+			width: auto;
+			height: 220px;
+			padding: 10px;
+			border: 1px solid #ccc;
+			margin: 10px;
+		}
+		.custom-color-picker > div {
+			display: inline-block;
+			height: 100%;
+			vertical-align: top;
+		}
+		.custom-color-picker .palette {
+			position: relative;
+			width: 220px;
+			height: 100%;
+			background: red;
+			overflow: hidden;
+		}
+		.custom-color-picker .palette:before {
+			content: '';
+			width: 100%;
+			height: 100%;
+			position: absolute;
+			background-image: linear-gradient(0deg, black, transparent), linear-gradient(90deg, white, transparent);
+		}
+
+		.custom-color-picker .palette-picker {
+			position: absolute;
+    	width: 10px;
+   		height: 10px;
+  		box-shadow: 0 0 0 1.5px #fff, inset 0 0 1px 1px rgba(0,0,0,.3), 0 0 1px 2px rgba(0,0,0,.4);
+  		border-radius: 50%;
+  		transform: translate(-50%,-50%);
+		}
+
+		.custom-color-picker .hsv-spectrum {
+			width: 20px;
+			position: relative;
+			background-image: linear-gradient(0deg, red 0, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, red);
+		}
+		.custom-color-picker .hsv-spectrum-picker {
+			position: absolute;
+			width: 100%;
+			height: 3px;
+			border-top: 1px solid white;
+			border-bottom: 1px solid white;
+			box-sizing: border-box;
+		}
+		
+		.custom-color-picker .value-controller div {
+			font-size: 0.8em;
+		}
+		.currentColor {
+			width: 100%;
+			height: 20px;
+			border-radius: 5px;
+		}
+		.custom-color-picker .value-controller label {
+			display: inline-block;
+			width: 15px;
+/*			font-size: 0.8em;*/
+		}
+		.custom-color-picker .value-controller input {
+			width: 2em;
+			padding: 3px;
+			margin: 3px 5px 3px 0;
+			border-radius: 5px;
+			border: 1px solid #ccc;
+			text-align: center;
+			outline: none;
+		}
+		.custom-color-picker .value-controller input:focus {
+			box-shadow: 0 0 0 2px orange;
+			border: 1px solid transparent;
+		}
+		.custom-color-picker .value-controller div:last-of-type input {
+			width: 3.75em;
+		}
+	</style>
+</head>
+<body>
+	<div class='custom-color-picker'>
+		<div class='palette'>
+			<div class='palette-picker'></div>
+		</div>
+		<div class='hsv-spectrum'>
+			<div class='hsv-spectrum-picker'></div>
+		</div>
+		<div class='value-controller'>
+			<div class='currentColor'></div>
+			<div><label for='color-picker-H'>H</label><input type='text' id='color-picker-H' maxlength='3' value='0' />°</div>
+			<div><label for='color-picker-S'>S</label><input type='text' id='color-picker-S' maxlength='3' value='100' />%</div>
+			<div><label for='color-picker-V'>V</label><input type='text' id='color-picker-V' maxlength='3' value='100' />%</div>
+			<div><label for='color-picker-R'>R</label><input type='text' id='color-picker-R' maxlength='3' value='255' /></div>
+			<div><label for='color-picker-G'>G</label><input type='text' id='color-picker-G' maxlength='3' value='0' /></div>
+			<div><label for='color-picker-B'>B</label><input type='text' id='color-picker-B' maxlength='3' value='0' /></div>
+			<div><label for='color-picker-hex'>#</label><input type='text' id='color-picker-HEX' maxlength='6' value='b77cf3' /></div>
+		</div>
+	</div>
+</body>
+</html>
